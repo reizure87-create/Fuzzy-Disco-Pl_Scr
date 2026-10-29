@@ -1,4 +1,4 @@
--- Prison Life menu — Mobile & PC compatible
+-- Prison Life menu — Mobile Hardened
 -- Executor required.
 
 local Players = game:GetService("Players")
@@ -25,14 +25,14 @@ local state = {
     flySpeed = 70,
     aimbot = false,
     aimbotFov = 150,
-    virtualKeys = {}, -- For mobile fly controls
+    virtualKeys = {},
 }
 
 local R = {}
 local lastAction = {}
 
 -- ----------------------------------------------------------------------------
--- remote resolution
+-- remote resolution (Runs in background so it doesn't freeze UI)
 -- ----------------------------------------------------------------------------
 local function waitFor(parent, name, timeout)
     local elapsed = 0
@@ -41,11 +41,11 @@ local function waitFor(parent, name, timeout)
         if child then return child end
         task.wait(0.1)
         elapsed = elapsed + 0.1
-    until elapsed >= (timeout or 10)
+    until elapsed >= (timeout or 15)
     return nil
 end
 
-local function resolveRemotes()
+task.spawn(function()
     local wr = waitFor(WS, "Remote", 15)
     local rsRemotes = RS:FindFirstChild("Remotes")
     R.team = wr and wr:FindFirstChild("TeamEvent")
@@ -56,9 +56,22 @@ local function resolveRemotes()
     R.melee = RS:FindFirstChild("meleeEvent")
         or (rsRemotes and rsRemotes:FindFirstChild("meleeEvent"))
     R.shoot = RS:FindFirstChild("ShootEvent")
-end
+end)
 
-resolveRemotes()
+-- ----------------------------------------------------------------------------
+-- UI Parent (gethui bypass for Delta)
+-- ----------------------------------------------------------------------------
+local parentGui
+if gethui then
+    parentGui = gethui()
+else
+    local success, core = pcall(function() return game:GetService("CoreGui") end)
+    if success and core then
+        parentGui = core
+    else
+        parentGui = LP:WaitForChild("PlayerGui")
+    end
+end
 
 -- ----------------------------------------------------------------------------
 -- notifications
@@ -67,8 +80,7 @@ local notifyGui = Instance.new("ScreenGui")
 notifyGui.Name = "pl_notify"
 notifyGui.ResetOnSpawn = false
 notifyGui.IgnoreGuiInset = true
-pcall(function() notifyGui.Parent = game:GetService("CoreGui") end)
-if not notifyGui.Parent then notifyGui.Parent = LP:WaitForChild("PlayerGui") end
+notifyGui.Parent = parentGui
 
 local function notify(text)
     local frame = Instance.new("Frame")
@@ -190,9 +202,6 @@ local function arrestTarget(target)
     arrest(target)
 end
 
--- ----------------------------------------------------------------------------
--- items / guns
--- ----------------------------------------------------------------------------
 local function giveAllGuns()
     local items = WS:FindFirstChild("Prison_ITEMS")
     local giver = items and items:FindFirstChild("giver")
@@ -239,11 +248,7 @@ local function modAllGuns()
     end
 end
 
--- ----------------------------------------------------------------------------
--- movement & fly logic
--- ----------------------------------------------------------------------------
-local flyBV, flyBG
-local flyControls
+local flyBV, flyBG, flyControls
 
 local function checkKey(key)
     return UIS:IsKeyDown(key) or state.virtualKeys[key]
@@ -300,9 +305,6 @@ RunService.Stepped:Connect(function()
     end
 end)
 
--- ----------------------------------------------------------------------------
--- Aimbot
--- ----------------------------------------------------------------------------
 RunService:BindToRenderStep("pl_aimbot", Enum.RenderPriority.Camera.Value + 1, function()
     if not state.aimbot then return end
     local cam = workspace.CurrentCamera
@@ -331,11 +333,7 @@ RunService:BindToRenderStep("pl_aimbot", Enum.RenderPriority.Camera.Value + 1, f
     end
 end)
 
--- ----------------------------------------------------------------------------
--- ESP
--- ----------------------------------------------------------------------------
 local espObjects = {}
-
 local function clearESP()
     for _, obj in ipairs(espObjects) do
         if obj and obj.Parent then obj:Destroy() end
@@ -346,9 +344,7 @@ end
 local function applyESP(plr)
     if plr == LP then return end
     local char = plr.Character
-    if not char then return end
-    if char:FindFirstChild("pl_esp") then return end
-
+    if not char or char:FindFirstChild("pl_esp") then return end
     local color = Color3.fromRGB(180, 180, 180)
     local team = teamName(plr)
     if team == "Bright blue" then color = Color3.fromRGB(70, 140, 255)
@@ -370,22 +366,14 @@ end
 local function refreshESP()
     clearESP()
     if not state.esp then return end
-    for _, plr in ipairs(Players:GetPlayers()) do
-        applyESP(plr)
-    end
+    for _, plr in ipairs(Players:GetPlayers()) do applyESP(plr) end
 end
 
--- ----------------------------------------------------------------------------
--- respawn / character hooks
--- ----------------------------------------------------------------------------
 local function respawn()
     if R.loadChar then
         pcall(function()
-            if R.loadChar:IsA("RemoteFunction") then
-                R.loadChar:InvokeServer()
-            else
-                R.loadChar:FireServer()
-            end
+            if R.loadChar:IsA("RemoteFunction") then R.loadChar:InvokeServer()
+            else R.loadChar:FireServer() end
         end)
     else
         pcall(function() LP:LoadCharacter() end)
@@ -400,36 +388,20 @@ local function onCharacter(char)
         hum.JumpPower = state.jumpPower or 50
         hum.UseJumpPower = true
     end
-    if state.autoMod then
-        task.wait(0.5)
-        modAllGuns()
-    end
-    if state.fly then
-        task.wait(0.2)
-        setFly(true)
-    end
-    if state.esp then
-        task.wait(0.5)
-        applyESP(LP)
-    end
+    if state.autoMod then task.wait(0.5) modAllGuns() end
+    if state.fly then task.wait(0.2) setFly(true) end
+    if state.esp then task.wait(0.5) applyESP(LP) end
 end
 
 LP.CharacterAdded:Connect(onCharacter)
-
 Players.PlayerAdded:Connect(function(plr)
     plr.CharacterAdded:Connect(function()
         task.wait(1)
         if state.esp then applyESP(plr) end
     end)
 end)
+LP.CharacterRemoving:Connect(function() setFly(false) end)
 
-LP.CharacterRemoving:Connect(function()
-    setFly(false)
-end)
-
--- ----------------------------------------------------------------------------
--- action loops
--- ----------------------------------------------------------------------------
 task.spawn(function()
     while true do
         task.wait(0.12)
@@ -467,31 +439,27 @@ task.spawn(function()
         end
 
         if state.teamLock and state.lockTeam then
-            if teamName(LP) ~= state.lockTeam then
-                setTeam(state.lockTeam)
-            end
+            if teamName(LP) ~= state.lockTeam then setTeam(state.lockTeam) end
         end
     end
 end)
 
 -- ----------------------------------------------------------------------------
--- GUI
+-- GUI (Sized for Mobile)
 -- ----------------------------------------------------------------------------
 local gui = Instance.new("ScreenGui")
 gui.Name = "pl_menu"
 gui.ResetOnSpawn = false
 gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-pcall(function() gui.Parent = game:GetService("CoreGui") end)
-if not gui.Parent then gui.Parent = LP:WaitForChild("PlayerGui") end
+gui.Parent = parentGui
 
--- Mobile Toggle Button (Top Left)
 local menuToggleBtn = Instance.new("TextButton")
-menuToggleBtn.Size = UDim2.new(0, 40, 0, 40)
+menuToggleBtn.Size = UDim2.new(0, 45, 0, 45)
 menuToggleBtn.Position = UDim2.new(0, 10, 0, 10)
 menuToggleBtn.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
 menuToggleBtn.Text = "M"
 menuToggleBtn.TextColor3 = Color3.fromRGB(230, 230, 245)
-menuToggleBtn.TextSize = 18
+menuToggleBtn.TextSize = 20
 menuToggleBtn.Font = Enum.Font.GothamBold
 menuToggleBtn.Parent = gui
 local toggleCorner = Instance.new("UICorner")
@@ -500,8 +468,10 @@ toggleCorner.Parent = menuToggleBtn
 
 local main = Instance.new("Frame")
 main.Name = "main"
-main.Size = UDim2.new(0, 460, 0, 380)
-main.Position = UDim2.new(0, 24, 0.5, -190)
+-- Responsive size (max 380x360, but fits smaller screens)
+local vp = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(800, 600)
+main.Size = UDim2.new(0, math.min(380, vp.X - 30), 0, math.min(360, vp.Y - 30))
+main.Position = UDim2.new(0, 20, 0.5, -main.Size.Y.Offset / 2)
 main.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
 main.BackgroundTransparency = 0.05
 main.BorderSizePixel = 0
@@ -570,7 +540,6 @@ list.Padding = UDim.new(0, 5)
 list.SortOrder = Enum.SortOrder.LayoutOrder
 list.Parent = scroll
 
--- Mobile-compatible Drag Logic (Touch + Mouse)
 do
     local dragging, dragStart, startPos
     titleBar.InputBegan:Connect(function(input)
@@ -579,26 +548,18 @@ do
             dragStart = input.Position
             startPos = main.Position
             input.Changed:Connect(function()
-                if input.UserInputState == Enum.UserInputState.End then
-                    dragging = false
-                end
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
             end)
         end
     end)
     UIS.InputChanged:Connect(function(input)
         if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
-            main.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
         end
     end)
 end
 
--- ----------------------------------------------------------------------------
--- Mobile Fly Controls (D-Pad)
--- ----------------------------------------------------------------------------
 flyControls = Instance.new("Frame")
 flyControls.Size = UDim2.new(0, 150, 0, 150)
 flyControls.Position = UDim2.new(0.5, -75, 1, -170)
@@ -617,35 +578,16 @@ local function makeFlyBtn(txt, pos, key)
     b.TextSize = 14
     b.Font = Enum.Font.GothamBold
     b.Parent = flyControls
-    
-    local function makeFlyBtn(txt, pos, key)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(0, 40, 0, 40)
-    b.Position = pos
-    b.BackgroundColor3 = Color3.fromRGB(30, 30, 45)
-    b.BackgroundTransparency = 0.3
-    b.Text = txt
-    b.TextColor3 = Color3.fromRGB(255, 255, 255)
-    b.TextSize = 14
-    b.Font = Enum.Font.GothamBold
-    b.Parent = flyControls
-    
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 6)
     c.Parent = b
-
     b.InputBegan:Connect(function(i) 
-        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then 
-            state.virtualKeys[key] = true 
-        end 
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then state.virtualKeys[key] = true end 
     end)
     b.InputEnded:Connect(function(i) 
-        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then 
-            state.virtualKeys[key] = false 
-        end 
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then state.virtualKeys[key] = false end 
     end)
 end
-
 makeFlyBtn("W", UDim2.new(0,55,0,0), Enum.KeyCode.W)
 makeFlyBtn("A", UDim2.new(0,0,0,55), Enum.KeyCode.A)
 makeFlyBtn("S", UDim2.new(0,55,0,55), Enum.KeyCode.S)
@@ -653,9 +595,6 @@ makeFlyBtn("D", UDim2.new(0,110,0,55), Enum.KeyCode.D)
 makeFlyBtn("Up", UDim2.new(0,0,0,110), Enum.KeyCode.Space)
 makeFlyBtn("Dn", UDim2.new(0,110,0,110), Enum.KeyCode.LeftControl)
 
--- ----------------------------------------------------------------------------
--- UI helpers
--- ----------------------------------------------------------------------------
 local function section(text)
     local lbl = Instance.new("TextLabel")
     lbl.Size = UDim2.new(1, 0, 0, 24)
@@ -666,35 +605,30 @@ local function section(text)
     lbl.Font = Enum.Font.GothamBold
     lbl.TextXAlignment = Enum.TextXAlignment.Left
     lbl.Parent = scroll
-    return lbl
 end
 
 local function button(text, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.Size = UDim2.new(1, 0, 0, 34)
     btn.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
     btn.BorderSizePixel = 0
     btn.Text = text
     btn.TextColor3 = Color3.fromRGB(225, 225, 240)
     btn.TextSize = 13
     btn.Font = Enum.Font.GothamMedium
-    btn.AutoButtonColor = true
     btn.Parent = scroll
-
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 5)
     c.Parent = btn
-
     btn.MouseButton1Click:Connect(function()
         local ok, err = pcall(callback)
         if not ok then notify("Error: " .. tostring(err)) end
     end)
-    return btn
 end
 
 local function toggle(text, key, callback)
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 0, 30)
+    btn.Size = UDim2.new(1, 0, 0, 34)
     btn.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
     btn.BorderSizePixel = 0
     btn.Text = "[OFF] " .. text
@@ -702,7 +636,6 @@ local function toggle(text, key, callback)
     btn.TextSize = 13
     btn.Font = Enum.Font.GothamMedium
     btn.Parent = scroll
-
     local c = Instance.new("UICorner")
     c.CornerRadius = UDim.new(0, 5)
     c.Parent = btn
@@ -710,20 +643,17 @@ local function toggle(text, key, callback)
     btn.MouseButton1Click:Connect(function()
         state[key] = not state[key]
         btn.Text = (state[key] and "[ON] " or "[OFF] ") .. text
-        btn.BackgroundColor3 = state[key]
-            and Color3.fromRGB(34, 78, 48)
-            or Color3.fromRGB(32, 32, 44)
+        btn.BackgroundColor3 = state[key] and Color3.fromRGB(34, 78, 48) or Color3.fromRGB(32, 32, 44)
         if callback then
             local ok, err = pcall(callback, state[key])
             if not ok then notify("Error: " .. tostring(err)) end
         end
     end)
-    return btn
 end
 
 local function input(text, default, callback)
     local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 30)
+    row.Size = UDim2.new(1, 0, 0, 34)
     row.BackgroundTransparency = 1
     row.Parent = scroll
 
@@ -738,8 +668,8 @@ local function input(text, default, callback)
     lbl.Parent = row
 
     local box = Instance.new("TextBox")
-    box.Size = UDim2.new(0.4, 0, 0, 24)
-    box.Position = UDim2.new(0.58, 0, 0, 3)
+    box.Size = UDim2.new(0.4, 0, 0, 26)
+    box.Position = UDim2.new(0.58, 0, 0, 4)
     box.BackgroundColor3 = Color3.fromRGB(32, 32, 44)
     box.BorderSizePixel = 0
     box.Text = tostring(default)
@@ -762,125 +692,79 @@ local function input(text, default, callback)
             box.Text = tostring(default)
         end
     end)
-    return box
 end
 
--- ----------------------------------------------------------------------------
--- menu contents
--- ----------------------------------------------------------------------------
 section("COMBAT")
-
 button("Kill All", function()
     for _, plr in ipairs(Players:GetPlayers()) do
-        if isEnemy(plr) then
-            task.spawn(meleeKill, plr)
-            task.wait(0.08)
-        end
+        if isEnemy(plr) then task.spawn(meleeKill, plr) task.wait(0.08) end
     end
 end)
-
 button("Arrest All Criminals", function()
-    if not ensureGuard() then
-        notify("Could not switch to Guard")
-        return
-    end
+    if not ensureGuard() then notify("Could not switch to Guard") return end
     for _, plr in ipairs(Players:GetPlayers()) do
-        if isCriminal(plr) then
-            task.spawn(arrestTarget, plr)
-            task.wait(0.12)
-        end
+        if isCriminal(plr) then task.spawn(arrestTarget, plr) task.wait(0.12) end
     end
 end)
-
 toggle("Aimbot", "aimbot")
 toggle("Kill Aura", "killAura")
 toggle("Arrest Aura", "arrestAura")
 toggle("Auto Arrest Criminals", "autoArrest")
-
 button("Give All Guns", giveAllGuns)
-button("Mod All Guns", function()
-    modAllGuns()
-    notify("Weapons modified")
-end)
+button("Mod All Guns", function() modAllGuns() notify("Weapons modified") end)
 toggle("Auto Mod Guns on Spawn", "autoMod")
 
 section("MOVEMENT")
-
 input("WalkSpeed", 16, function(n)
     state.walkSpeed = math.clamp(n, 1, 200)
-    local hum = getHum(LP)
-    if hum then hum.WalkSpeed = state.walkSpeed end
+    local hum = getHum(LP) if hum then hum.WalkSpeed = state.walkSpeed end
 end)
-
 input("JumpPower", 50, function(n)
     state.jumpPower = math.clamp(n, 1, 300)
-    local hum = getHum(LP)
-    if hum then
-        hum.UseJumpPower = true
-        hum.JumpPower = state.jumpPower
-    end
+    local hum = getHum(LP) if hum then hum.UseJumpPower = true hum.JumpPower = state.jumpPower end
 end)
-
 toggle("Noclip", "noclip")
 toggle("Fly", "fly", function(on) setFly(on) end)
-
 button("Teleport to Nearest Player", function()
-    local my = getHRP(LP)
-    if not my then return end
+    local my = getHRP(LP) if not my then return end
     local best, bestDist
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LP then
             local hrp = getHRP(plr)
             if hrp then
                 local d = (my.Position - hrp.Position).Magnitude
-                if not bestDist or d < bestDist then
-                    best, bestDist = plr, d
-                end
+                if not bestDist or d < bestDist then best, bestDist = plr, d end
             end
         end
     end
-    if best then
-        tpTo(best, CFrame.new(0, 0, 3))
-        notify("Teleported to " .. best.Name)
-    end
+    if best then tpTo(best, CFrame.new(0, 0, 3)) notify("Teleported to " .. best.Name) end
 end)
-
 button("Teleport to Random Criminal", function()
     local criminals = {}
     for _, plr in ipairs(Players:GetPlayers()) do
-        if isCriminal(plr) and getHRP(plr) then
-            table.insert(criminals, plr)
-        end
+        if isCriminal(plr) and getHRP(plr) then table.insert(criminals, plr) end
     end
     if #criminals > 0 then
         local target = criminals[math.random(1, #criminals)]
         tpTo(target, CFrame.new(0, 0, 3))
         notify("Teleported to " .. target.Name)
-    else
-        notify("No criminals")
-    end
+    else notify("No criminals") end
 end)
 
 section("PLAYER")
-
 button("Become Guard", function() setTeam("Bright blue") end)
 button("Become Inmate", function() setTeam("Bright orange") end)
 button("Become Criminal", function() setTeam("Really red") end)
 button("Become Neutral", function() setTeam("Medium stone grey") end)
-
 toggle("Team Lock", "teamLock")
 button("Lock to Guard", function()
     state.lockTeam = "Bright blue"
     state.teamLock = true
     notify("Team locked: Guard")
 end)
-
-toggle("ESP", "esp", function(on)
-    if on then refreshESP() else clearESP() end
-end)
+toggle("ESP", "esp", function(on) if on then refreshESP() else clearESP() end end)
 
 section("MISC")
-
 button("Respawn", respawn)
 button("Panic", function()
     for k in pairs(state) do
@@ -891,3 +775,6 @@ button("Panic", function()
     main.Visible = false
     notify("All features disabled")
 end)
+
+notify("Loaded — Tap 'M' to toggle menu")
+print("Prison Life Script Loaded Successfully.")
