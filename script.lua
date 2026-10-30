@@ -5,7 +5,7 @@
 	██╔══██╗██║   ██║██╔══██╗     ██╔══██║██║   ██║██╔══██╗
 	██║  ██║╚██████╔╝██████╔╝     ██║  ██║╚██████╔╝██████╔╝
 	╚═╝  ╚═╝ ╚═════╝ ╚═════╝      ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
-	RiotHub v2.2 — Prison Life all-in-one · keyless · single file
+	RiotHub v2.3 — Prison Life all-in-one · keyless · single file
 	No external loadstrings, no key gates, no pastebin dependencies.
 	Runs on Delta / Solara / Codex / Xeno / Wave / KRNL / Synapse-family, mobile OK.
 
@@ -1117,7 +1117,7 @@ end)
 print("[RiotHub] stage 2: building GUI")
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "RiotHub_GUI"
-screenGui.IgnoreSafeArea = true
+screenGui.IgnoreGuiInset = true
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 -- RENDER-SAFETY: parent to PlayerGui FIRST — it's the same layer the game
@@ -1827,7 +1827,7 @@ corner(keybindLabel, 7)
 pad(keybindLabel, 10)
 section(pageCfg, "About")
 local aboutLabel = make("TextLabel", {
-	Text = "RiotHub v2.2 — self-contained, keyless, no external deps.\n"
+	Text = "RiotHub v2.3 — self-contained, keyless, no external deps.\n"
 		.. "Combat: aura loops (kill / arrest / taze), aimbot, silent aim,\ntrigger bot.\n"
 		.. "Guns: pull every catalogued item from anywhere, rewrite GunStates live.\n"
 		.. "Visuals: ESP + team chams + FOV ring. Movement: full suite.\n"
@@ -2023,5 +2023,5 @@ getGenv().RiotHub = {
 	config = CONFIG,
 }
 
-log("riot hub v2.2 armed for " .. lp.Name)
+log("riot hub v2.3 armed for " .. lp.Name)
 notify("Riot Hub", "loaded - tap the RH button / RightCtrl to open", 4)
