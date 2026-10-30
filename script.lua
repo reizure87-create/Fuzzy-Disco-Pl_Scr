@@ -1,5 +1,5 @@
 --[[
-	RiotHub v3.0 — Prison Life all-in-one · keyless · single file
+	RiotHub v3.1 — Prison Life all-in-one · keyless · single file
 	No external loadstrings, no key gates, no pastebin dependencies.
 	Runs on Delta / Solara / Codex / Xeno / Wave / KRNL / Synapse-family, mobile OK.
 
@@ -124,6 +124,7 @@ local CONFIG = {
 	maxLogLines      = 40,    clickArrest = false,
 	clickTp          = false,
 	reduceAnim       = false,
+	antiAfk          = true,
 }
 
 -- ============================================================================
@@ -142,6 +143,7 @@ local state = {
 	logCounter   = 0,
 	lastItemPull = 0,
 	touchMove    = { fwd = 0, back = 0, up = 0, down = 0 }, -- fly pad state
+	noclipSaved  = {},   -- parts we flipped CanCollide on (restored when off)
 	uiAnim       = 0.14, -- seconds; CONFIG.reduceAnim drops this to 0
 }
 local connections = {}
@@ -432,6 +434,10 @@ local function giveAllLoot()
 			if state.detached then return end
 			giveAnywhere(m)
 		end
+		for _, e in ipairs({ "Handcuffs", "Taser" }) do
+			if state.detached then return end
+			giveAnywhere(e)
+		end
 		local riotPolice = findItemAnywhere("Riot Police")
 		if riotPolice then
 			local child = riotPolice:FindFirstChild("ITEMPICKUP")
@@ -506,6 +512,10 @@ local function buildBullets(targetPart, count)
 			Distance  = 25,
 			Cframe    = targetPart and targetPart.CFrame or CFrame.new(),
 			Color     = Color3.fromRGB(255, 255, 0),
+			-- belt-and-suspenders: some server builds read the part reference
+			-- instead of computing from Cframe; harmless extra keys otherwise
+			HitPart   = targetPart,
+			Visualize = false,
 		}
 	end
 	return bullets
@@ -882,10 +892,10 @@ local function applyMovementFrame(dt)
 	if not hum then return end
 
 	-- enforce chosen locomotion constants
-	if hum.WalkSpeed ~= CONFIG.walkSpeed and (CONFIG.walkSpeed ~= 16 or state.toggles.antiTaze) then
+	if hum.WalkSpeed ~= CONFIG.walkSpeed and (CONFIG.walkSpeed ~= 16 or CONFIG.noStayStunned) then
 		hum.WalkSpeed = CONFIG.walkSpeed
 	end
-	if CONFIG.jumpPower ~= 50 and hum.JumpPower ~= CONFIG.jumpPower then
+	if hum.JumpPower ~= CONFIG.jumpPower then
 		hum.JumpPower = CONFIG.jumpPower
 	end
 	-- un-stun watchdog (taze sets WalkSpeed 0)
@@ -924,8 +934,17 @@ local function applyMovementFrame(dt)
 
 	if state.toggles.noclipOn then
 		for _, p in ipairs(ch:GetDescendants()) do
-			if p:IsA("BasePart") and p.CanCollide then p.CanCollide = false end
+			if p:IsA("BasePart") and p.CanCollide then
+				state.noclipSaved[p] = true
+				p.CanCollide = false
+			end
 		end
+	elseif next(state.noclipSaved) then
+		-- noclip OFF: restore every part we touched (respawn-safe)
+		for p in pairs(state.noclipSaved) do
+			if p.Parent then pcall(function() p.CanCollide = true end) end
+		end
+		state.noclipSaved = {}
 	end
 end
 connect(runSvc.Heartbeat, applyMovementFrame)
@@ -1100,9 +1119,13 @@ local function setupSilentAim()
 							for _, b in ipairs(args[1]) do
 								if CONFIG.silentRandomPart then
 									local other = best.Parent.PrimaryPart and best.Parent.PrimaryPart or best
-									b.Cframe = (math.random() < 0.5) and best.CFrame or other.CFrame
+									if math.random() < 0.5 then
+										b.Cframe, b.HitPart = best.CFrame, best
+									else
+										b.Cframe, b.HitPart = other.CFrame, other
+									end
 								else
-									b.Cframe = best.CFrame
+									b.Cframe, b.HitPart = best.CFrame, best
 								end
 							end
 							log("silent bullet re-aimed to " .. best.Parent.Name)
@@ -1187,6 +1210,8 @@ local function applyChams(plr)
 			or isCrim(plr) and Color3.fromRGB(255, 60, 60)
 			or Color3.fromRGB(220, 220, 220)
 		hil.FillTransparency = 0.55
+		hil.DepthMode = CONFIG.chamsThroughWalls and Enum.HighlightDepthMode.AlwaysOnTop
+			or Enum.HighlightDepthMode.Occluded
 		hil.OutlineColor = Color3.new(0, 0, 0)
 		hil.OutlineTransparency = 0.2
 	end)
@@ -1407,8 +1432,6 @@ local function setFpsBoost(on)
 			if d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Smoke")
 				or d:IsA("Fire") or d:IsA("Beam") then
 				pcall(function() d.Enabled = false end)
-			elseif d:IsA("Decal") and d.Parent and not d.Parent:IsA("Tool") then
-				pcall(function() d.Transparency = 1 end)
 			end
 		end
 		fpsBoostConn = connect(workspace.DescendantAdded, function(d)
@@ -1479,14 +1502,14 @@ end
 
 -- WINDOW — clamped to the viewport so phones get a full-bleed feel
 local view = currentCam() and currentCam().ViewportSize or Vector2.new(1280, 720)
-local winW = math.clamp(view.X - 24, 380, 660)
+local winW = math.clamp(view.X - 24, 340, 660)
 local winH = math.clamp(view.Y - 120, 300, 470)
 
 local window = make("Frame", {
 	Name = "Window",
 	Size = UDim2.fromOffset(winW, winH),
 	Position = UDim2.new(0.5, -winW / 2, 0.5, -winH / 2),
-	BackgroundColor3 = THEME.bg, BorderSizePixel = 0,
+	BackgroundColor3 = THEME.bg, BorderSizePixel = 0, ZIndex = 6,
 }, screenGui)
 corner(window, 14)
 stroke(window, THEME.stroke, 1)
@@ -1532,11 +1555,19 @@ local function pingButton(btn)
 	end)
 end
 
+-- subtle "pop" when the window is revealed (content-creator feel, cheap)
+local windowScale = window:FindFirstChildOfClass("UIScale")
+local function popWindow()
+	if not windowScale then return end
+	windowScale.Scale = 0.955
+	tw(windowScale, { Scale = 1 }, 0.16):Play()
+end
+
 -- FLY PAD — on-screen arrows so Fly works on a phone
 local flyPad = make("Frame", {
 	Name = "FlyPad", Visible = false, BackgroundTransparency = 1,
 	Size = UDim2.fromOffset(232, 150),
-	Position = UDim2.new(1, -248, 1, -164),
+	Position = UDim2.new(1, -248, 1, -164), ZIndex = 2,
 }, screenGui)
 local function flyButton(label, prop, amount)
 	local btn = make("TextButton", {
@@ -1582,7 +1613,7 @@ local toastHost = make("Frame", {
 	Name = "ToastHost", BackgroundTransparency = 1,
 	Position = UDim2.new(1, -16, 0, 16),
 	Size = UDim2.new(0, 240, 1, -32),
-	AnchorPoint = Vector2.new(1, 0),
+	AnchorPoint = Vector2.new(1, 0), ZIndex = 20,
 }, screenGui)
 make("UIListLayout", {
 	Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
@@ -1675,6 +1706,7 @@ do
 		if dragging and moved <= 6 then
 			pingButton(toggleFab)
 			window.Visible = not window.Visible
+			if window.Visible then popWindow() end
 		end
 		dragging = false
 		task.delay(0.1, function() fabDragged = false end)
@@ -1708,20 +1740,13 @@ make("TextLabel", {
 	Size = UDim2.new(1, -96, 1, 0), Position = UDim2.new(0, 14, 0, 0),
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, topBar)
-make("TextLabel", {
-	Text = "keyless · single file", Font = Enum.Font.Gotham, TextSize = 11,
-	TextColor3 = THEME.textDim, BackgroundTransparency = 1,
-	Size = UDim2.new(0, 160, 1, 0), Position = UDim2.new(0, 14, 0, 0),
-	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Bottom,
-	TextTransparency = 0.25,
-}, topBar)
 local hideBtn = make("TextButton", {
-	Text = "–", Size = UDim2.new(0, 40, 1, 0), Position = UDim2.new(1, -84, 0, 0),
+	Text = "-", Size = UDim2.new(0, 40, 1, 0), Position = UDim2.new(1, -84, 0, 0),
 	BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
 	TextColor3 = THEME.textDim, TextSize = 18,
 }, topBar)
 local closeBtn = make("TextButton", {
-	Text = "✕", Size = UDim2.new(0, 40, 1, 0), Position = UDim2.new(1, -44, 0, 0),
+	Text = "X", Size = UDim2.new(0, 40, 1, 0), Position = UDim2.new(1, -44, 0, 0),
 	BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
 	TextColor3 = THEME.accent, TextSize = 15,
 }, topBar)
@@ -1764,7 +1789,7 @@ local statusLabel = make("TextLabel", {
 	TextXAlignment = Enum.TextXAlignment.Left,
 }, statusRow)
 local logBtn = make("TextButton", {
-	Text = "LOG ▲", Font = Enum.Font.GothamBold, TextSize = 11,
+	Text = "LOG +", Font = Enum.Font.GothamBold, TextSize = 11,
 	TextColor3 = THEME.text, BackgroundColor3 = THEME.card, BorderSizePixel = 0,
 	Size = UDim2.new(0, 70, 0, 18), Position = UDim2.new(1, -78, 0, 3),
 	AutoButtonColor = false,
@@ -1782,7 +1807,7 @@ logScroll = make("ScrollingFrame", {
 	CanvasSize = UDim2.new(0, 0, 0, 40), ScrollBarThickness = 2,
 }, logPanel)
 logText = make("TextLabel", {
-	Name = "LogText", Text = "RiotHub v3.0 — session log",
+	Name = "LogText", Text = "RiotHub v3.1 — session log",
 	Size = UDim2.new(1, -8, 0, 20), BackgroundTransparency = 1,
 	Font = Enum.Font.Code, TextColor3 = Color3.fromRGB(120, 235, 170),
 	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
@@ -1791,7 +1816,7 @@ logText = make("TextLabel", {
 local logOpen = false
 logBtn.MouseButton1Click:Connect(function()
 	logOpen = not logOpen
-	logBtn.Text = logOpen and "LOG ▼" or "LOG ▲"
+	logBtn.Text = logOpen and "LOG -" or "LOG +"
 	logPanel.Visible = logOpen
 end)
 
@@ -1838,6 +1863,9 @@ local function newTab(label)
 		btn.TextColor3 = THEME.text
 		tw(entry.bar, { BackgroundTransparency = 0 }, 0.12)
 		page.Visible = true
+		local list = page:FindFirstChildOfClass("UIListLayout")
+		contentHolder.CanvasSize = UDim2.new(0, 0, 0,
+			(list and list.AbsoluteContentSize.Y or 0) + 20)
 		contentHolder.CanvasPosition = Vector2.new(0, 0)
 	end)
 	return page
@@ -1846,9 +1874,14 @@ end
 local function ensureCanvas(page)
 	local list = page:FindFirstChildOfClass("UIListLayout")
 	if list then
-		connect(list:GetPropertyChangedSignal("AbsoluteContentSize"), function()
-			contentHolder.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 20)
-		end)
+		local function sync()
+			-- only the VISIBLE page may drive the scroll canvas height
+			if activeTabEntry and activeTabEntry.page == page then
+				contentHolder.CanvasSize = UDim2.new(0, 0, 0, list.AbsoluteContentSize.Y + 20)
+			end
+		end
+		connect(list:GetPropertyChangedSignal("AbsoluteContentSize"), sync)
+		if activeTabEntry and activeTabEntry.page == page then sync() end
 	end
 end
 
@@ -2040,19 +2073,29 @@ local function dropdownRow(owner, label, options, default, callback)
 		TextColor3 = THEME.text, TextXAlignment = Enum.TextXAlignment.Left,
 	}, row)
 	local chosen = make("TextLabel", {
-		Text = (default or "-") .. " ▾", Size = UDim2.new(0.42, -8, 1, 0),
+		Text = (default or "-"), Size = UDim2.new(0.42, -8, 1, 0),
 		Position = UDim2.new(0.58, 0, 0, 0), BackgroundTransparency = 1,
 		Font = Enum.Font.GothamBold, TextSize = 12,
 		TextColor3 = THEME.accent, TextXAlignment = Enum.TextXAlignment.Right,
 	}, row)
+	local listH = math.min(#options, 8) * 26 + 6
+	local baseH = 34
 	local list = make("Frame", {
-		Size = UDim2.new(1, 0, 0, math.min(#options, 8) * 26 + 6),
+		Size = UDim2.new(1, 0, 0, listH),
 		BackgroundColor3 = Color3.fromRGB(33, 35, 43), BorderSizePixel = 0,
-		Position = UDim2.new(0, 0, 1, 4), Visible = false, ZIndex = 12,
+		Position = UDim2.new(0, 2, 0, baseH + 2), Visible = false, ZIndex = 12,
 	}, row)
 	corner(list, 8)
 	stroke(list, THEME.stroke)
 	local openTgl = false
+	-- inline expansion: the row grows so the option list stays inside the
+	-- scrolling page (a popup would get clipped at the page edge on mobile)
+	local function setOpen(open)
+		openTgl = open
+		list.Visible = open
+		row.Size = UDim2.new(1, -8, 0, baseH + (open and (listH + 6) or 0))
+		row.ZIndex = open and 11 or 4
+	end
 	for idx, opt in ipairs(options) do
 		local optBtn = make("TextButton", {
 			Text = opt, Size = UDim2.new(1, -6, 0, 24),
@@ -2066,17 +2109,13 @@ local function dropdownRow(owner, label, options, default, callback)
 		pad(optBtn, 8, 0, 0)
 		corner(optBtn, 6)
 		optBtn.MouseButton1Click:Connect(function()
-			chosen.Text = opt .. " ▾"
+			chosen.Text = opt
 			if callback then callback(opt) end
-			list.Visible = false
-			openTgl = false
-			row.ZIndex = 4
+			setOpen(false)
 		end)
 	end
 	row.MouseButton1Click:Connect(function()
-		openTgl = not openTgl
-		list.Visible = openTgl
-		row.ZIndex = openTgl and 11 or 4
+		setOpen(not openTgl)
 	end)
 	return { Text = chosen }
 end
@@ -2188,13 +2227,33 @@ toggleRow(pageCombat, "auraKillOn", "Kill Aura", "Auto-attacks every valid targe
 sliderRow(pageCombat, "Kill Radius", 10, 260, CONFIG.killAuraRadius,
 	function(v) CONFIG.killAuraRadius = math.floor(v + 0.5) end, "studs")
 sliderRow(pageCombat, "Kill Pace", 5, 100, math.floor(CONFIG.killAuraRate * 100),
-	function(v) CONFIG.killAuraRate = math.max(v / 100, 0.05) end, "s")
+	function(v) CONFIG.killAuraRate = math.max(v / 100, 0.05) end, "cs")
 dropdownRow(pageCombat, "Kill Mode", { "Fists", "Gun" }, CONFIG.killAuraMode,
 	function(choice) CONFIG.killAuraMode = choice end)
 dropdownRow(pageCombat, "Targets", { "All", "Inmates", "Guards", "Criminals" }, CONFIG.auraTargets,
 	function(choice) CONFIG.auraTargets = choice end)
 toggleRow(pageCombat, "skipFF", "Respect Forcefields", "Don't attack shielded spawns",
 	CONFIG.killAuraIgnoreFF, function(v) CONFIG.killAuraIgnoreFF = v end)
+
+section(pageCombat, "Aim")
+toggleRow(pageCombat, "aimOn", "Aimbot", "Locks the camera onto the nearest head inside the ring",
+	false, function(v) end)
+sliderRow(pageCombat, "Aim FOV", 20, 500, CONFIG.aimbotFov,
+	function(v) CONFIG.aimbotFov = math.floor(v + 0.5) end)
+sliderRow(pageCombat, "Aim Smoothing", 0, 100, CONFIG.aimbotSmooth,
+	function(v) CONFIG.aimbotSmooth = v end, "%")
+toggleRow(pageCombat, "silentOn", "Silent Aim", "Re-aims YOUR shots onto the nearest head on the wire",
+	false, function(v) end)
+sliderRow(pageCombat, "Silent FOV", 20, 999, CONFIG.silentFov,
+	function(v) CONFIG.silentFov = math.floor(v + 0.5) end)
+sliderRow(pageCombat, "Silent Hit %", 0, 100, CONFIG.silentHitChance,
+	function(v) CONFIG.silentHitChance = math.floor(v + 0.5) end, "%")
+toggleRow(pageCombat, "silentWall", "Wall Check", "Only re-aims when the head is actually visible",
+	CONFIG.silentWallCheck, function(v) CONFIG.silentWallCheck = v end)
+toggleRow(pageCombat, "triggerOn", "Trigger Bot", "Auto-fires when your crosshair touches a target",
+	false, function(v) end)
+dropdownRow(pageCombat, "Aim Targets", { "All", "Inmates", "Guards", "Criminals" }, CONFIG.aimbotTargets,
+	function(choice) CONFIG.aimbotTargets = choice end)
 
 section(pageCombat, "Arrest")
 toggleRow(pageCombat, "auraArrestOn", "Arrest Aura", "Snaps to + cuffs the nearest arrestable at your own pace",
@@ -2253,6 +2312,12 @@ buttonRow(pageGun, "Become Guard + Handcuffs", function()
 end)
 toggleRow(pageGun, "autoRearmOn", "Auto Re-Arm", "Re-grants guns and mods them after every respawn/death",
 	CONFIG.autoRearm, function(v) CONFIG.autoRearm = v end)
+
+section(pageGun, "Auto Collect")
+toggleRow(pageGun, "autoCollectOn", "Auto Collect", "Pulls the nearest item part toward you every pacing beat",
+	false, function(v) end)
+sliderRow(pageGun, "Collect Radius", 40, 900, CONFIG.autoCollectRadius,
+	function(v) CONFIG.autoCollectRadius = math.floor(v + 0.5) end, "studs")
 
 section(pageGun, "Gun Mods (GunStates rewrites)")
 sliderRow(pageGun, "Damage", 1, 250, CONFIG.gunDamage, function(v) CONFIG.gunDamage = math.floor(v + 0.5) end)
@@ -2477,7 +2542,7 @@ pairRow(pageCfg, "Hide Panel", function() window.Visible = false end,
 
 section(pageCfg, "About")
 local aboutLabel = make("TextLabel", {
-	Text = "RiotHub v3.0 — self-contained, keyless, no external deps.\n"
+	Text = "RiotHub v3.1 — self-contained, keyless, no external deps.\n"
 		.. "Pull-based guns · GunStates engine · aura suite (kill / arrest / taze) · "
 		.. "silent aim + aimbot · ESP/chams/tracers · flight pad for touch. "
 		.. "Every remote hit is pcall-guarded and logged.",
@@ -2575,22 +2640,32 @@ task.spawn(function()
 	end
 end)
 
--- auto-collect items near you (paced!)
+-- auto-collect items near you (paced! server validates ItemHandler timing)
 task.spawn(function()
 	while not state.detached do
-		task.wait(1.0)
-		local pt = prisonTable()
-		if pt and state.lastItemPull + CONFIG.itemPace <= tick() then
-			local myRoot = charRoot()
-			local had
-			if myRoot then
+		task.wait(0.8)
+		if state.toggles.autoCollectOn
+			and state.lastItemPull + CONFIG.itemPace <= tick() then
+			local pt, myRoot = prisonTable(), charRoot()
+			if pt and myRoot and ItemHandler then
+				local pick
 				for _, candidate in ipairs(pt:GetDescendants()) do
 					if candidate.Name == "ITEMPICKUP" and candidate:IsA("BasePart") then
 						local d = (candidate.Position - myRoot.Position).Magnitude
 						if d <= CONFIG.autoCollectRadius then
-							if not had then had = candidate end
+							pick = candidate
+							break
 						end
 					end
+				end
+				if pick then
+					pace()
+					vsafe(function()
+						ItemHandler:InvokeServer({
+							Position = myRoot.CFrame,
+							Parent = pick.Parent or pick,
+						})
+					end)
 				end
 			end
 		end
@@ -2608,12 +2683,12 @@ task.spawn(function()
 		state.fps = frameCount
 		frameCount = 0
 		pcall(function()
-			statusLabel.Text = "v3.0 · fps "
+			statusLabel.Text = "v3.1 · fps "
 				.. tostring(state.fps) .. " · " .. tostring(#plrs:GetPlayers())
 				.. " players · remotes M"
-				.. (meleeEvent and "✓" or "✗") .. " S"
-				.. (shootingEvent and "✓" or "✗") .. " I"
-				.. (ItemHandler and "✓" or "✗")
+				.. (meleeEvent and "+" or "-") .. " S"
+				.. (shootingEvent and "+" or "-") .. " I"
+				.. (ItemHandler and "+" or "-")
 			statKills.Text = tostring(state.killCounter) .. " actions"
 			statArrests.Text = tostring(state.arrestCount) .. " cuffs"
 			statItems.Text = tostring(state.itemCount) .. " items"
@@ -2662,7 +2737,7 @@ end)
 
 -- global keys
 connect(uis.InputBegan, function(input, processed)
-	if state.detached then return end
+	if state.detached or processed then return end
 	local kc = input.KeyCode
 	if kc == Enum.KeyCode.RightControl or kc == Enum.KeyCode.U then
 		if not processed then window.Visible = not window.Visible end
@@ -2711,6 +2786,16 @@ connect(lp.CharacterAdded, function(ch)
 	end
 end)
 
+-- late joiners get ESP units while ESP is on
+connect(plrs.PlayerAdded, function(plr)
+	if not state.toggles.espOn then return end
+	task.wait(1)
+	if state.detached then return end
+	if state.toggles.espOn and not state.espUnits[plr] then
+		state.espUnits[plr] = buildEspUnit(plr)
+	end
+end)
+
 -- player removal: clean ESP/tracers
 connect(plrs.PlayerRemoving, function(plr)
 	destroyEspUnit(plr)
@@ -2743,6 +2828,6 @@ getGenv().RiotHub = {
 	toggles = state.toggles,
 }
 
-log("riot hub v3.0 armed for " .. lp.Name)
+log("riot hub v3.1 armed for " .. lp.Name)
 notify("Riot Hub v3", "loaded — tap the RH button", 4)
-toast("RiotHub v3.0", "Loaded for " .. lp.Name .. " — tap RH to open", 3, "ok")
+toast("RiotHub v3.1", "Loaded for " .. lp.Name .. " — tap RH to open", 3, "ok")
