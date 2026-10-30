@@ -1,5 +1,5 @@
 --[[
-	RiotHub v3.1 — Prison Life all-in-one · keyless · single file
+	RiotHub v3.2 — Prison Life all-in-one · keyless · single file
 	No external loadstrings, no key gates, no pastebin dependencies.
 	Runs on Delta / Solara / Codex / Xeno / Wave / KRNL / Synapse-family, mobile OK.
 
@@ -124,6 +124,7 @@ local CONFIG = {
 	maxLogLines      = 40,    clickArrest = false,
 	clickTp          = false,
 	reduceAnim       = false,
+	instantRespawn   = false,
 	antiAfk          = true,
 }
 
@@ -1497,7 +1498,9 @@ local function stroke(o, color, thickness)
 end
 local function tw(obj, goal, dur)
 	local ti = TweenInfo.new(dur or state.uiAnim, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-	return tweSvc:Create(obj, ti, goal)
+	local t = tweSvc:Create(obj, ti, goal)
+	t:Play() -- v3.2 FIX: Create() alone does NOT animate; this was the "toggles work but never look ON" bug
+	return t
 end
 
 -- WINDOW — clamped to the viewport so phones get a full-bleed feel
@@ -1767,7 +1770,7 @@ make("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.Layo
 pad(tabsRail, 6, 3, 6)
 
 local contentHolder = make("ScrollingFrame", {
-	Size = UDim2.new(1, -140, 1, -42 - 26 - 70),
+	Size = UDim2.new(1, -140, 1, -42 - 30),
 	Position = UDim2.new(0, 134, 0, 42),
 	BackgroundColor3 = THEME.surface, BorderSizePixel = 0,
 	CanvasSize = UDim2.new(0, 0, 0, 0), ScrollBarThickness = 3,
@@ -1807,7 +1810,7 @@ logScroll = make("ScrollingFrame", {
 	CanvasSize = UDim2.new(0, 0, 0, 40), ScrollBarThickness = 2,
 }, logPanel)
 logText = make("TextLabel", {
-	Name = "LogText", Text = "RiotHub v3.1 — session log",
+	Name = "LogText", Text = "RiotHub v3.2 — session log",
 	Size = UDim2.new(1, -8, 0, 20), BackgroundTransparency = 1,
 	Font = Enum.Font.Code, TextColor3 = Color3.fromRGB(120, 235, 170),
 	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
@@ -1856,12 +1859,12 @@ local function newTab(label)
 			activeTabEntry.page.Visible = false
 			activeTabEntry.txt.BackgroundColor3 = THEME.bg
 			activeTabEntry.txt.TextColor3 = THEME.textDim
-			tw(activeTabEntry.bar, { BackgroundTransparency = 0.35 }, 0.12)
+			activeTabEntry.bar.BackgroundTransparency = 0.35
 		end
 		activeTabEntry = entry
 		btn.BackgroundColor3 = THEME.card
 		btn.TextColor3 = THEME.text
-		tw(entry.bar, { BackgroundTransparency = 0 }, 0.12)
+		entry.bar.BackgroundTransparency = 0
 		page.Visible = true
 		local list = page:FindFirstChildOfClass("UIListLayout")
 		contentHolder.CanvasSize = UDim2.new(0, 0, 0,
@@ -1922,6 +1925,11 @@ local function toggleRow(owner, id, label, desc, default, callback)
 		AutoButtonColor = false, Parent = owner,
 	}, owner)
 	corner(row, 8)
+	-- accent outline while the feature is ON: state readable at a glance
+	local rowStroke = make("UIStroke", {
+		Color = THEME.accent, Thickness = 1.3, Transparency = 1,
+		ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	}, row)
 	local body = make("Frame", { BackgroundTransparency = 1, Size = UDim2.new(1, -56, 1, 0) }, row)
 	pad(body, 11)
 	make("TextLabel", {
@@ -1954,20 +1962,27 @@ local function toggleRow(owner, id, label, desc, default, callback)
 	local function set(v)
 		enabled = v == true
 		state.toggles[id] = enabled
-		tw(switch, {
-			BackgroundColor3 = enabled and THEME.green or Color3.fromRGB(52, 55, 66),
-		}, 0.12)
-		tw(knob, {
-			Position = enabled and UDim2.new(1, -19, 0, 3) or UDim2.new(0, 3, 0, 3),
-		}, 0.12)
+		-- instant repaint FIRST (never rely on the tween for state clarity)
+		switch.BackgroundColor3 = enabled and THEME.green or Color3.fromRGB(52, 55, 66)
+		rowStroke.Transparency = enabled and 0.35 or 1
+		knob.Position = enabled and UDim2.new(1, -19, 0, 3) or UDim2.new(0, 3, 0, 3)
+		tw(knob, { Position = knob.Position }, 0.1)
+		if statusLabel then
+			statusLabel.Text = label .. "  ->  " .. (enabled and "ON" or "OFF")
+		end
 		if callback then
-			local ok, err = pcall(callback, enabled)
-			if not ok then log("toggle error [" .. id .. "]: " .. tostring(err), true) end
+			-- callbacks may grant items (yields up to 3.2s of pacing) — never
+			-- run them on the click thread or the UI feels frozen
+			task.spawn(function()
+				local ok, err = pcall(callback, enabled)
+				if not ok then log("toggle error [" .. id .. "]: " .. tostring(err), true) end
+			end)
 		end
 	end
 	row.MouseButton1Click:Connect(function() set(not enabled) end)
 	state.toggles[id] = enabled
 	state.switches[id] = { Set = set }
+	rowStroke.Transparency = enabled and 0.35 or 1
 	return { Set = set }
 end
 
@@ -1990,11 +2005,11 @@ local function sliderRow(owner, label, minV, maxV, default, callback, suffix)
 		TextColor3 = THEME.accent, TextXAlignment = Enum.TextXAlignment.Right,
 	}, row)
 	local bar = make("Frame", {
-		Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 0, 25),
+		Size = UDim2.new(1, 0, 0, 20), Position = UDim2.new(0, 0, 0, 22),
 		BackgroundTransparency = 1, Active = true,
 	}, row)
 	local track = make("Frame", {
-		Size = UDim2.new(1, 0, 0, 6), Position = UDim2.new(0, 0, 0.5, -3),
+		Size = UDim2.new(1, 0, 0, 7), Position = UDim2.new(0, 0, 0.5, -3.5),
 		BackgroundColor3 = Color3.fromRGB(45, 48, 58), BorderSizePixel = 0,
 	}, bar)
 	corner(track, 3)
@@ -2054,6 +2069,7 @@ local function buttonRow(owner, label, callback, wideText)
 	corner(btn, 8)
 	btn.MouseButton1Click:Connect(function()
 		pingButton(btn)
+		if statusLabel then statusLabel.Text = label .. "  ->  fired" end
 		local ok, err = pcall(callback)
 		if not ok then log("button error [" .. label .. "]: " .. tostring(err), true) end
 	end)
@@ -2445,6 +2461,26 @@ buttonRow(pageTele, "Prison Spawn Location", function()
 		log("Spawns folder not found", true)
 	end
 end)
+buttonRow(pageTele, "Teleport to Nearest Player", function()
+	local myRoot = charRoot()
+	if not myRoot then return end
+	local best, bestD = nil, math.huge
+	for _, plr in ipairs(plrs:GetPlayers()) do
+		if plr ~= lp and plr.Character then
+			local r = plr.Character:FindFirstChild("HumanoidRootPart")
+			if r then
+				local d = (r.Position - myRoot.Position).Magnitude
+				if d < bestD then best, bestD = r, d end
+			end
+		end
+	end
+	if best then
+		teleportTo(best.CFrame * CFrame.new(0, 0, 2.5))
+		toast("Teleport", "Warped to the nearest player", 1.5, "ok")
+	else
+		log("no other players on the server", true)
+	end
+end)
 
 -- ---------------------------------------------------------------------------
 -- SERVER
@@ -2477,6 +2513,13 @@ toggleRow(pageSrv, "antiStunOn", "Anti-Stun", "Taze stun (0 walkspeed) is instan
 	CONFIG.noStayStunned, function(v) CONFIG.noStayStunned = v end)
 toggleRow(pageSrv, "antiAfkOn", "Anti-AFK", "Fakes RemoteEvent nibbles so you're never idle-kicked",
 	true, function(v) CONFIG.antiAfk = v end)
+toggleRow(pageSrv, "instantRespawnOn", "Instant Respawn", "Re-fires loadchar the moment you die",
+	CONFIG.instantRespawn, function(v) CONFIG.instantRespawn = v end)
+buttonRow(pageSrv, "Rejoin Server", function()
+	toast("Rejoining", "Teleporting to a fresh server", 2)
+	task.wait(0.4)
+	pcall(function() teleportSvc:Teleport(game.PlaceId, lp) end)
+end)
 buttonRow(pageSrv, "Server Report", function()
 	log("place " .. tostring(game.PlaceId) .. " · " .. tostring(#plrs:GetPlayers()) .. " players")
 	log("remotes — melee=" .. tostring(not not meleeEvent) .. " shoot=" .. tostring(not not shootingEvent)
@@ -2542,7 +2585,7 @@ pairRow(pageCfg, "Hide Panel", function() window.Visible = false end,
 
 section(pageCfg, "About")
 local aboutLabel = make("TextLabel", {
-	Text = "RiotHub v3.1 — self-contained, keyless, no external deps.\n"
+	Text = "RiotHub v3.2 — self-contained, keyless, no external deps.\n"
 		.. "Pull-based guns · GunStates engine · aura suite (kill / arrest / taze) · "
 		.. "silent aim + aimbot · ESP/chams/tracers · flight pad for touch. "
 		.. "Every remote hit is pcall-guarded and logged.",
@@ -2683,7 +2726,7 @@ task.spawn(function()
 		state.fps = frameCount
 		frameCount = 0
 		pcall(function()
-			statusLabel.Text = "v3.1 · fps "
+			statusLabel.Text = "v3.2 · fps "
 				.. tostring(state.fps) .. " · " .. tostring(#plrs:GetPlayers())
 				.. " players · remotes M"
 				.. (meleeEvent and "+" or "-") .. " S"
@@ -2764,6 +2807,21 @@ connect(lp.Idled, function()
 	end)
 end)
 
+-- instant respawn (QoL every big PL hub ships): refire loadchar right after death
+connect(lp.CharacterAdded, function(ch)
+	local hum = ch:WaitForChild("Humanoid", 5)
+	if not hum then return end
+	connect(hum.Died, function()
+		if not CONFIG.instantRespawn or state.detached then return end
+		task.wait(0.6)
+		local loadChar = getRemote("loadchar")
+		if loadChar then
+			vsafe(function() loadChar:InvokeServer(lp.Name) end)
+			log("instant respawn fired")
+		end
+	end)
+end)
+
 -- respawn hook
 connect(lp.CharacterAdded, function(ch)
 	task.wait(0.4)
@@ -2828,6 +2886,6 @@ getGenv().RiotHub = {
 	toggles = state.toggles,
 }
 
-log("riot hub v3.1 armed for " .. lp.Name)
+log("riot hub v3.2 armed for " .. lp.Name)
 notify("Riot Hub v3", "loaded — tap the RH button", 4)
-toast("RiotHub v3.1", "Loaded for " .. lp.Name .. " — tap RH to open", 3, "ok")
+toast("RiotHub v3.2", "Loaded for " .. lp.Name .. " — tap RH to open", 3, "ok")
