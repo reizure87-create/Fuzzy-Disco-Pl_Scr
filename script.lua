@@ -5,7 +5,7 @@
 	██╔══██╗██║   ██║██╔══██╗     ██╔══██║██║   ██║██╔══██╗
 	██║  ██║╚██████╔╝██████╔╝     ██║  ██║╚██████╔╝██████╔╝
 	╚═╝  ╚═╝ ╚═════╝ ╚═════╝      ╚═╝  ╚═╝ ╚═════╝ ╚═════╝
-	RiotHub v2.1.1 — Prison Life all-in-one · keyless · single file
+	RiotHub v2.2 — Prison Life all-in-one · keyless · single file
 	No external loadstrings, no key gates, no pastebin dependencies.
 	Runs on Delta / Solara / Codex / Xeno / Wave / KRNL / Synapse-family, mobile OK.
 
@@ -64,11 +64,17 @@ pcall(function()
 	if getGenv().RiotHub and getGenv().RiotHub.Unload then getGenv().RiotHub.Unload() end
 end)
 pcall(function()
-	local parent = (gethui and gethui()) or game:FindFirstChildOfClass("CoreGui")
-	if parent then
-		for _, name in ipairs({ "RiotHub_GUI", "RiotHubFOVRing", "RiotHubEspOverlays" }) do
-			local old = parent:FindFirstChild(name)
-			if old then old:Destroy() end
+	-- hunt stale GUIs in every possible parent (old copies from a previous run)
+	local candidates = {}
+	if gethui then pcall(function() table.insert(candidates, gethui()) end) end
+	table.insert(candidates, game:FindFirstChildOfClass("CoreGui"))
+	table.insert(candidates, lp and lp:FindFirstChild("PlayerGui"))
+	for _, parent in ipairs(candidates) do
+		if parent then
+			for _, name in ipairs({ "RiotHub_GUI", "RiotHubFOVRing", "RiotHubEspOverlays" }) do
+				local old = parent:FindFirstChild(name)
+				if old then old:Destroy() end
+			end
 		end
 	end
 end)
@@ -878,7 +884,9 @@ local function ensureEspContainer()
 	if espContainer then return espContainer end
 	espContainer = Instance.new("Folder")
 	espContainer.Name = "RiotHubEspOverlays"
-	espContainer.Parent = (gethui and gethui()) or lp:WaitForChild("PlayerGui")
+	espContainer.Parent = lp:WaitForChild("PlayerGui", 10)
+		or (gethui and gethui())
+		or game:FindFirstChildOfClass("CoreGui")
 	return espContainer
 end
 
@@ -1112,7 +1120,14 @@ screenGui.Name = "RiotHub_GUI"
 screenGui.IgnoreSafeArea = true
 screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-local uiParent = (gethui and gethui()) or game:FindFirstChildOfClass("CoreGui") or lp:WaitForChild("PlayerGui")
+-- RENDER-SAFETY: parent to PlayerGui FIRST — it's the same layer the game
+-- draws its own HUD on, so it renders on every client/executor. gethui() and
+-- CoreGui are fallbacks only: some Delta builds return hidden-UI containers
+-- that own the ScreenGui but render nothing, producing a "loaded but
+-- invisible" hub (exactly the mobile failure we saw).
+local uiParent = lp:WaitForChild("PlayerGui", 10)
+if not uiParent and gethui then pcall(function() uiParent = gethui() end) end
+if not uiParent then uiParent = game:FindFirstChildOfClass("CoreGui") end
 screenGui.Parent = uiParent
 
 local function make(class, props, parent)
@@ -1812,7 +1827,7 @@ corner(keybindLabel, 7)
 pad(keybindLabel, 10)
 section(pageCfg, "About")
 local aboutLabel = make("TextLabel", {
-	Text = "RiotHub v2.1.1 — self-contained, keyless, no external deps.\n"
+	Text = "RiotHub v2.2 — self-contained, keyless, no external deps.\n"
 		.. "Combat: aura loops (kill / arrest / taze), aimbot, silent aim,\ntrigger bot.\n"
 		.. "Guns: pull every catalogued item from anywhere, rewrite GunStates live.\n"
 		.. "Visuals: ESP + team chams + FOV ring. Movement: full suite.\n"
@@ -2008,5 +2023,5 @@ getGenv().RiotHub = {
 	config = CONFIG,
 }
 
-log("riot hub v2.1.1 armed for " .. lp.Name)
+log("riot hub v2.2 armed for " .. lp.Name)
 notify("Riot Hub", "loaded - tap the RH button / RightCtrl to open", 4)
